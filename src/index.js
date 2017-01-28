@@ -1,16 +1,18 @@
-import { cloneElement, h, Component } from 'preact';
-import { exec, pathRankSort, assign } from './util';
+import { h, Component } from 'preact';
+import { exec, pathRankSort } from './util';
 
 let customHistory = null;
 
 const ROUTERS = [];
 
-const subscribers = [];
-
 const EMPTY = {};
 
+// hangs off all elements created by preact
+const ATTR_KEY = typeof Symbol!=='undefined' ? Symbol.for('preactattr') : '__preactattr_';
+
+
 function isPreactElement(node) {
-	return node.__preactattr_!=null || typeof Symbol!=='undefined' && node[Symbol.for('preactattr')]!=null;
+	return ATTR_KEY in node;
 }
 
 function setUrl(url, type='push') {
@@ -38,7 +40,6 @@ function getCurrentUrl() {
 }
 
 
-
 function route(url, replace=false) {
 	if (typeof url!=='string' && url.url) {
 		replace = url.replace;
@@ -56,25 +57,13 @@ function route(url, replace=false) {
 
 /** Check if the given URL can be handled by any router instances. */
 function canRoute(url) {
-	for (let i=ROUTERS.length; i--; ) {
-		if (ROUTERS[i].canRoute(url)) return true;
-	}
-	return false;
+	return ROUTERS.some(router => router.canRoute(url));
 }
 
 
 /** Tell all router instances to handle the given URL.  */
 function routeTo(url) {
-	let didRoute = false;
-	for (let i=0; i<ROUTERS.length; i++) {
-		if (ROUTERS[i].routeTo(url)===true) {
-			didRoute = true;
-		}
-	}
-	for (let i=subscribers.length; i--; ) {
-		subscribers[i](url);
-	}
-	return didRoute;
+	return ROUTERS.reduce((didRoute, router) => (router.routeTo(url) === true || didRoute), false);
 }
 
 
@@ -86,7 +75,7 @@ function routeFromLink(node) {
 		target = node.getAttribute('target');
 
 	// ignore links with targets and non-path URLs
-	if (!href || !href.match(/^\//g) || (target && !target.match(/^_?self$/i))) return;
+	if (!/^\//.test(href) || (target && !target.match(/^_?self$/i))) return;
 
 	// attempt to route, if no match simply cede control to browser
 	return route(href);
@@ -94,10 +83,9 @@ function routeFromLink(node) {
 
 
 function handleLinkClick(e) {
-	if (e.button==0) {
-		routeFromLink(e.currentTarget || e.target || this);
-		return prevent(e);
-	}
+	if (e.button !== 0) return;
+	routeFromLink(e.currentTarget || e.target || this);
+	return prevent(e);
 }
 
 
@@ -113,12 +101,11 @@ function prevent(e) {
 
 function delegateLinkHandler(e) {
 	// ignore events the browser takes care of already:
-	if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.button!==0) return;
+	if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.button !== 0) return;
 
 	let t = e.target;
 	do {
 		if (String(t.nodeName).toUpperCase()==='A' && t.getAttribute('href') && isPreactElement(t)) {
-			if (t.hasAttribute('native')) return;
 			// if link is handled by the router, prevent browser defaults
 			if (routeFromLink(t)) {
 				return prevent(e);
@@ -128,21 +115,15 @@ function delegateLinkHandler(e) {
 }
 
 
-let eventListenersInitialized = false;
-
-function initEventListeners() {
-	if (eventListenersInitialized){
-		return;
-	}
-
-	if (typeof addEventListener==='function') {
-		if (!customHistory) {
-			addEventListener('popstate', () => routeTo(getCurrentUrl()));
-		}
-		addEventListener('click', delegateLinkHandler);
-	}
-	eventListenersInitialized = true;
+if (typeof addEventListener==='function') {
+	addEventListener('popstate', () => routeTo(getCurrentUrl()));
+	addEventListener('click', delegateLinkHandler);
 }
+
+
+const Link = (props) => {
+	return h('a', Object.assign({}, props, { onClick: handleLinkClick }));
+};
 
 
 class Router extends Component {
@@ -153,15 +134,12 @@ class Router extends Component {
 		}
 
 		this.state = {
-			url: props.url || getCurrentUrl()
+			url: this.props.url || getCurrentUrl()
 		};
-
-		initEventListeners();
 	}
 
 	shouldComponentUpdate(props) {
-		if (props.static!==true) return true;
-		return props.url!==this.props.url || props.onChange!==this.props.onChange;
+		return props.static!==true || props.url!==this.props.url || props.onChange!==this.props.onChange;
 	}
 
 	/** Check if the given URL can be matched against any children */
@@ -187,16 +165,10 @@ class Router extends Component {
 	}
 
 	componentDidMount() {
-		if (customHistory) {
-			this.unlisten = customHistory.listen((location) => {
-				this.routeTo(`${location.pathname || ''}${location.search || ''}`);
-			});
-		}
 		this.updating = false;
 	}
 
 	componentWillUnmount() {
-		if (typeof this.unlisten==='function') this.unlisten();
 		ROUTERS.splice(ROUTERS.indexOf(this), 1);
 	}
 
@@ -209,20 +181,17 @@ class Router extends Component {
 	}
 
 	getMatchingChildren(children, url, invoke) {
-		return children.slice().sort(pathRankSort).map( vnode => {
-			let attrs = vnode.attributes || {},
-				path = attrs.path,
-				matches = exec(url, path, attrs);
+		return children.slice().sort(pathRankSort).filter( ({ attributes }) => {
+			let path = attributes.path,
+				matches = exec(url, path, attributes);
 			if (matches) {
 				if (invoke!==false) {
-					let newProps = { url, matches };
-					assign(newProps, matches);
-					return cloneElement(vnode, newProps);
+					// copy matches onto props
+					Object.assign(attributes, { url, matches }, matches);
 				}
-				return vnode;
+				return true;
 			}
-			return false;
-		}).filter(Boolean);
+		});
 	}
 
 	render({ children, onChange }, { url }) {
@@ -249,18 +218,16 @@ class Router extends Component {
 	}
 }
 
-const Link = (props) => (
-	h('a', assign({ onClick: handleLinkClick }, props))
-);
 
-const Route = props => h(props.component, props);
+const Route = ({ component, url, matches }) => {
+	return h(component, { url, matches });
+};
 
-Router.subscribers = subscribers;
-Router.getCurrentUrl = getCurrentUrl;
+
 Router.route = route;
 Router.Router = Router;
 Router.Route = Route;
 Router.Link = Link;
 
-export { subscribers, getCurrentUrl, route, Router, Route, Link };
+export { route, Router, Route, Link };
 export default Router;
