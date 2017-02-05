@@ -1,12 +1,15 @@
 
 const EMPTY = {};
 
-export function exec(url, route, opts=EMPTY) {
+export function match(url, route) {
 	let reg = /^([^?]*)(?:\?([^#]*))?(#.*)?$/,
-		[, pathname, search] = (url.match(reg) || []),
-		matches = {},
+		[, pathname, search] = (url.match(reg) || []);
+	return exec(segmentize(pathname || ''), route);
+}
+
+export function exec(url, route, opts=EMPTY) {
+	let matches = {},
 		ret;
-	url = segmentize(pathname);
 	route = segmentize(route || '');
 	let max = Math.max(url.length, route.length);
 	for (let i=0; i<max; i++) {
@@ -31,18 +34,6 @@ export function exec(url, route, opts=EMPTY) {
 		}
 	}
 	if (opts.default!==true && ret===false) return false;
-
-	if (search) {
-		const queryParams = {};
-		search.split('&').forEach(parameter => {
-			let [name, ...value] = parameter.split('=');
-			queryParams[decodeURIComponent(name)] = decodeURIComponent(value.join('='));
-		});
-		matches = {
-			...queryParams,
-			...matches
-		};
-	}
 	return matches;
 }
 
@@ -62,31 +53,14 @@ export function segmentize(url) {
 	return strip(url).split('/');
 }
 
-export function rank(path) {
-	return strip(path).
-	        replace(/(:)?([^\/]*?)([*+?])?(?:\/+|$)/g, (match, isParam, segment, flag) => {
-		if (isParam) {
-			if (flag === '*') {
-				return '1';
-			} else if (flag === '+') {
-				return '2';
-			} else if (flag === '?') {
-				return '3';
-			}
-			return '4';
-		} else if (segment) {
-			return '5';
-		}
-		return '';
-	}) || '5';
-}
+export const rankSegment = (segment) => {
+	let [, isParam, , flag] = /^(:?)(.*?)([*+?]?)$/.exec(segment);
+	return String(isParam ? ('0*+?'.indexOf(flag) || 4) : 5);
+};
 
-// export const rank = (path) => (
-// 	strip(path).
-// 	        replace(/(:)?([^\/]*?)([*+?]?)(?:\/+|$)/g, (match, isParam, segment, flag) => (
-// 			isParam ? ('0*+?'.indexOf(flag) || 4) : (segment ? 5 : '')
-// 		)) || '5'
-// );
+export const rank = (path) => (
+	segmentize(path).map(rankSegment).join('')
+);
 
 export function rankChild({ attributes=EMPTY }) {
 	return attributes.default ? '0' : rank(attributes.path);
@@ -94,4 +68,26 @@ export function rankChild({ attributes=EMPTY }) {
 
 export function strip(url) {
 	return url.replace(/(^\/+|\/+$)/g, '');
+}
+
+const $query = (search) => {
+	return !search ? EMPTY :
+		search.split('&')
+			.reduce(($query, parameter) => {
+				let [name, ...value] = parameter.split('=');
+				$query[decodeURIComponent(name)] = decodeURIComponent(value.join('='));
+
+				return $query
+			}, {});
+
+};
+
+export function prepare(url) {
+	let reg = /^([^?]*)(?:\?([^#]*))?(#.*)?$/,
+		[, pathname, search] = (url.match(reg) || []),
+		urlSegments = segmentize(pathname || '');
+	return {
+		urlSegments,
+		$query: () => (search ? $query(search) : EMPTY)
+	};
 }

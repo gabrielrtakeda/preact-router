@@ -1,5 +1,5 @@
 import { h, Component } from 'preact';
-import { exec, rankChild } from './util';
+import { exec, prepare, segmentize, rankChild } from './util';
 
 let customHistory = null;
 
@@ -157,7 +157,9 @@ class Router extends Component {
 
 	/** Check if the given URL can be matched against any children */
 	canRoute(url) {
-		return this.props.children.some(({ attributes=EMPTY }) => !!exec(url, attributes.path, attributes));
+		const { urlSegments } = prepare(url);
+		return this.props.children
+			.some(({ attributes }) => attributes && !!exec(urlSegments, attributes.path, attributes));
 	}
 
 	/** Re-render children with a new URL to match against. */
@@ -200,7 +202,9 @@ class Router extends Component {
 	}
 
 	getMatchingChildren(children, url, invoke) {
+		const { urlSegments, $query } = prepare(url);
 		return children
+			.filter(({ attributes }) => !!attributes)
 			.map((child, index) => ({ child, index, rank: rankChild(child) }))
 			.sort((a, b) => (
 				(a.rank < b.rank) ? 1 :
@@ -208,13 +212,13 @@ class Router extends Component {
 				(a.index - b.index)
 			))
 			.map(({ child }) => child)
-			.filter(({ attributes=EMPTY }) => {
+			.filter(({ attributes }) => {
 				let path = attributes.path,
-					matches = exec(url, path, attributes);
+					matches = exec(urlSegments, path, attributes);
 				if (matches) {
 					if (invoke!==false) {
 						// copy matches onto props
-						Object.assign(attributes, { url, matches }, matches);
+						Object.assign(attributes, { url, matches }, $query(), matches);
 					}
 					return true;
 				}
