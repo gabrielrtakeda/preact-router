@@ -182,6 +182,7 @@ class Router extends Component {
 
 	getMatchingChildren(children, url, invoke) {
 		return children
+			.filter(({ attributes }) => !!attributes)
 			.map((child, index) => ({ child, index, rank: rankChild(child) }))
 			.sort((a, b) => (
 				(a.rank < b.rank) ? 1 :
@@ -189,7 +190,7 @@ class Router extends Component {
 				(a.index - b.index)
 			))
 			.map(({ child }) => child)
-			.filter(({ attributes=EMPTY }) => {
+			.filter(({ attributes }) => {
 				let path = attributes.path,
 					matches = exec(url, path, attributes);
 				if (matches) {
